@@ -3,4 +3,5 @@
 
 # But not these files...
 !.gitignore
+!README.md
 !slack_download_delete.py

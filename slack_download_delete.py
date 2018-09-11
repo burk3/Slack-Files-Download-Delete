@@ -80,17 +80,17 @@ def list_files():
     if restrict_user_id:
         params['user'] = restrict_user_id
     if DEBUG:
-        print 'files.list params:', params
+        print('files.list params:', params)
 
     uri = 'https://slack.com/api/files.list'
     response = requests.get(uri, params=params)
     ret = json.loads(response.text)['files']
     pginfo = json.loads(response.text)['paging']
     if DEBUG:
-        print pginfo
+        print(pginfo)
     while params['page'] < pginfo['pages']:
         params['page'] += 1
-        print 'Loading page', params['page'], 'of', pginfo['pages']
+        print('Loading page', params['page'], 'of', pginfo['pages'])
         response = requests.get(uri, params=params)
         ret += json.loads(response.text)['files']
     return ret
@@ -110,25 +110,25 @@ def process_files(files):
         }
 
         if 'url_private_download' in file:
-            print count, "/", num_files, "-", userdb[file['user']], '-', file['title']
-            print file['url_private_download']
+            print(count, "/", num_files, "-", user_db[file['user']], '-', file['title'])
+            print(file['url_private_download'])
             skip_delete = True
             if download:
                 r = requests.get(file['url_private_download'], headers=header, stream=True)
                 if r.status_code == 200:
-                    filename = userdb[file['user']] + '_' + str(file['created']) + '_' + file['id'] + '_' + file['name']
+                    filename = user_db[file['user']] + '_' + str(file['created']) + '_' + file['id'] + '_' + file['name']
                     filename = re.sub('[^\w\-_\. \']', '_', filename)
                     with open(os.path.join(directory, filename), 'wb') as f:
                         for chunk in r:
                             f.write(chunk)
-                    print 'Successfully Downloaded', filename
+                    print('Successfully Downloaded', filename)
                     skip_delete = False
                 else:
-                    print 'Download Failed!'
+                    print('Download Failed!')
                     skip_delete = True
             if delete:
                 if download and skip_delete:
-                    print 'Skipping Delete'
+                    print('Skipping Delete')
                     continue
                 params = {
                     'token': token
@@ -137,36 +137,43 @@ def process_files(files):
                 delete_uri = 'https://slack.com/api/files.delete'
                 response = requests.get(delete_uri, params=params)
                 if not json.loads(response.text)['ok']:
-                    print 'Error deleting file:', file['id'], json.loads(response.text)['error']
+                    print('Error deleting file:', file['id'], json.loads(response.text)['error'])
                 else:
-                    print count, "/", num_files, " deleted -", file['id']
+                    print(count, "/", num_files, " deleted -", file['id'])
 
-channeldb = get_channel_ids()
-userdb = get_user_ids()
-if DEBUG:
-    print 'Channels:', channeldb
-    print 'Users:', userdb
 
-if restrict_user_name:
-    restrict_user_id = reverse_db_lookup(userdb, restrict_user_name)
-    if restrict_user_id:
-        print 'Restricting results to user:', restrict_user_name
-    else:
-        print 'Unable to find User:', restrict_user_name
-        exit(1)
+def main():
+    global restrict_user_id, restrict_channel_id
+    channel_db = get_channel_ids()
+    user_db = get_user_ids()
+    if DEBUG:
+        print('Channels:', channel_db)
+        print('Users:', user_db)
 
-if restrict_channel_name:
-    restrict_channel_id = reverse_db_lookup(channeldb, restrict_channel_name)
-    if restrict_channel_id:
-        print 'Restricting results to channel:', restrict_channel_name
-    else:
-        print 'Unable to find channel:', restrict_channel_name
-        exit(1)
+    if restrict_user_name:
+        restrict_user_id = reverse_db_lookup(user_db, restrict_user_name)
+        if restrict_user_id:
+            print('Restricting results to user:', restrict_user_name)
+        else:
+            print('Unable to find User:', restrict_user_name)
+            exit(1)
 
-if download:
-    if not os.path.exists(directory):
-        print 'Download directory does not exists, creating', directory
-        os.makedirs(directory)
+    if restrict_channel_name:
+        restrict_channel_id = reverse_db_lookup(channel_db, restrict_channel_name)
+        if restrict_channel_id:
+            print('Restricting results to channel:', restrict_channel_name)
+        else:
+            print('Unable to find channel:', restrict_channel_name)
+            exit(1)
 
-files = list_files()
-process_files(files)
+    if download:
+        if not os.path.exists(directory):
+            print('Download directory does not exists, creating', directory)
+            os.makedirs(directory)
+
+    _files = list_files()
+    process_files(_files)
+
+
+if __name__ == "__main__":
+    main()

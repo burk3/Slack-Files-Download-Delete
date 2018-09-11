@@ -1,178 +1,174 @@
-import requests
-import time
 import json
 import os
 import re
+import time
+from argparse import ArgumentParser
 from sys import exit
 
-# Slack legacy API token https://api.slack.com/custom-integrations/legacy-tokens
-token = 'xoxp-11111111111-11111111111-111111111111-x1x1x1x1x1x1x1x1x1x1x1x1x1x1x1x1'
-# Don't touch files older than this
-minimum_age = 5
-
-# Optionally restrict to a source channel
-restrict_channel_name = 'general'
-# Optionally restrict to a source user
-restrict_user_name = None
-
-# Download files
-download = True
-directory = 'downloads'
-
-# Delete file after successful export
-delete = False
+import requests
 
 
-DEBUG = False
+class DownloadDeleteTask(object):
+    def __init__(self, token, debug=False):
+        self.token: str = token
+        self.debug: bool = debug
+        self._user_db = None
+        self._channel_db = None
 
-# Delete files older than this:
-ts_to = int(time.time()) - minimum_age * 24 * 60 * 60
+    @property
+    def channel_db(self):
+        if self._channel_db:
+            return self._channel_db
 
-restrict_channel_id = None
-restrict_user_id = None
-
-
-def get_channel_ids():
-    params = {
-        'token': token
-    }
-    uri = 'https://slack.com/api/channels.list'
-    response = requests.get(uri, params=params)
-    channel_list = json.loads(response.text)['channels']
-    with open('metadata_channels.json', 'wb') as f:
-            f.write(response.text)
-    db = {}
-    for c in channel_list:
-        db[c['id']] = c['name']
-    return db
-
-
-def get_user_ids():
-    params = {
-        'token': token
-    }
-    uri = 'https://slack.com/api/users.list'
-    response = requests.get(uri, params=params)
-    users_list = json.loads(response.text)['members']
-    with open('metadata_users.json', 'wb') as f:
-            f.write(response.text)
-    db = {}
-    for u in users_list:
-        db[u['id']] = u['name']
-    return db
-
-
-def reverse_db_lookup(db, check):
-    for key in db:
-        if db[key] == check:
-            return key
-
-
-def list_files():
-    params = {
-        'token': token
-        , 'ts_to': ts_to
-        , 'count': 1000
-        , 'page': 1
-    }
-    if restrict_channel_id:
-        params['channel'] = restrict_channel_id
-    if restrict_user_id:
-        params['user'] = restrict_user_id
-    if DEBUG:
-        print('files.list params:', params)
-
-    uri = 'https://slack.com/api/files.list'
-    response = requests.get(uri, params=params)
-    ret = json.loads(response.text)['files']
-    pginfo = json.loads(response.text)['paging']
-    if DEBUG:
-        print(pginfo)
-    while params['page'] < pginfo['pages']:
-        params['page'] += 1
-        print('Loading page', params['page'], 'of', pginfo['pages'])
-        response = requests.get(uri, params=params)
-        ret += json.loads(response.text)['files']
-    return ret
-
-
-def process_files(files):
-    count = 0
-    num_files = len(files)
-    with open(os.path.join('metadata_files.json'), 'w') as f:
-        f.write(json.dumps(files))
-
-    for file in files:
-        count += 1
-
-        header = {
-            'Authorization': ('Bearer ' + token)
+        params = {
+            'token': self.token
         }
+        uri = 'https://slack.com/api/channels.list'
+        response = requests.get(uri, params=params)
+        channel_list = json.loads(response.text)['channels']
+        with open('metadata_channels.json', 'wb') as f:
+                f.write(response.text)
+        db = {}
+        for c in channel_list:
+            db[c['id']] = c['name']
+        self._channel_db = db
+        return db
 
-        if 'url_private_download' in file:
-            print(count, "/", num_files, "-", user_db[file['user']], '-', file['title'])
-            print(file['url_private_download'])
-            skip_delete = True
-            if download:
-                r = requests.get(file['url_private_download'], headers=header, stream=True)
-                if r.status_code == 200:
-                    filename = user_db[file['user']] + '_' + str(file['created']) + '_' + file['id'] + '_' + file['name']
-                    filename = re.sub('[^\w\-_\. \']', '_', filename)
-                    with open(os.path.join(directory, filename), 'wb') as f:
-                        for chunk in r:
-                            f.write(chunk)
-                    print('Successfully Downloaded', filename)
-                    skip_delete = False
-                else:
-                    print('Download Failed!')
-                    skip_delete = True
-            if delete:
-                if download and skip_delete:
-                    print('Skipping Delete')
-                    continue
-                params = {
-                    'token': token
-                    , 'file': file['id']
-                }
-                delete_uri = 'https://slack.com/api/files.delete'
-                response = requests.get(delete_uri, params=params)
-                if not json.loads(response.text)['ok']:
-                    print('Error deleting file:', file['id'], json.loads(response.text)['error'])
-                else:
-                    print(count, "/", num_files, " deleted -", file['id'])
+    @property
+    def user_db(self):
+        if self._user_db:
+            return self._user_db
+
+        params = {
+            'token': self.token
+        }
+        uri = 'https://slack.com/api/users.list'
+        response = requests.get(uri, params=params)
+        users_list = json.loads(response.text)['members']
+        with open('metadata_users.json', 'wb') as f:
+                f.write(response.text)
+        db = {}
+        for u in users_list:
+            db[u['id']] = u['name']
+        self._user_db = db
+        return db
+
+    @staticmethod
+    def reverse_db_lookup(db, check):
+        for key in db:
+            if db[key] == check:
+                return key
+
+    def list_files(self, minimum_age, restrict_user_name=None, restrict_channel_name=None):
+        ts_to = int(time.time()) - minimum_age * 24 * 60 * 60
+        params = {
+            "token": self.token,
+            "ts_to": ts_to,
+            "count": 1000,
+            "page": 1,
+        }
+        if restrict_channel_name:
+            params["channel"] = self.reverse_db_lookup(self.channel_db, restrict_channel_name)
+        if restrict_user_name:
+            params["user"] = self.reverse_db_lookup(self.user_db, restrict_user_name)
+        if self.debug:
+            print("files.list params:", params),
+
+        uri = "https://slack.com/api/files.list",
+        response = requests.get(uri, params=params)
+        ret = json.loads(response.text)["files"]
+        page_info = json.loads(response.text)["paging"]
+        if self.debug:
+            print(page_info)
+        while params["page"] < page_info["pages"]:
+            params['page'] += 1
+            print('Loading page', params['page'], 'of', page_info['pages'])
+            response = requests.get(uri, params=params)
+            ret += json.loads(response.text)['files']
+        return ret
+
+    def process_files(self, files, download: str=None, delete=False):
+        count = 0
+        num_files = len(files)
+        with open(os.path.join('metadata_files.json'), 'w') as f:
+            f.write(json.dumps(files))
+
+        for file in files:
+            count += 1
+
+            header = {
+                'Authorization': ('Bearer ' + self.token)
+            }
+
+            if 'url_private_download' in file:
+                print(count, "/", num_files, "-", self.user_db[file['user']], '-', file['title'])
+                print(file['url_private_download'])
+                skip_delete = True
+                if download:
+                    r = requests.get(file['url_private_download'], headers=header, stream=True)
+                    if r.status_code == 200:
+                        filename = "{}_{}_{}_{}".format(
+                            self.user_db[file["user"]],
+                            str(file["created"]),
+                            file["id"],
+                            file["name"],
+                        )
+                        filename = re.sub(r"[^\w\-_. ']", "_", filename)  # TODO: this looks jank.
+                        with open(os.path.join(download, filename), 'wb') as f:
+                            for chunk in r:
+                                f.write(chunk)
+                        print('Successfully Downloaded', filename)
+                        skip_delete = False
+                    else:
+                        print('Download Failed!')
+                        skip_delete = True
+                if delete:
+                    if download and skip_delete:
+                        print('Skipping Delete')
+                        continue
+                    params = {
+                        'token': self.token,
+                        'file': file['id'],
+                    }
+                    delete_uri = 'https://slack.com/api/files.delete'
+                    response = requests.get(delete_uri, params=params)
+                    if not json.loads(response.text)['ok']:
+                        print('Error deleting file:', file['id'], json.loads(response.text)['error'])
+                    else:
+                        print(count, "/", num_files, " deleted -", file['id'])
 
 
 def main():
-    global restrict_user_id, restrict_channel_id
-    channel_db = get_channel_ids()
-    user_db = get_user_ids()
-    if DEBUG:
-        print('Channels:', channel_db)
-        print('Users:', user_db)
+    parser = ArgumentParser(
+        description=("A slack file downloader/deleter for you poor folks out there without thicc wads of VC money to "
+                     "drop on a slack sub."),
+        epilog="You need to set the env var SFDD_SLACK_TOKEN to a legacy token you generate.",
+    )
 
-    if restrict_user_name:
-        restrict_user_id = reverse_db_lookup(user_db, restrict_user_name)
-        if restrict_user_id:
-            print('Restricting results to user:', restrict_user_name)
-        else:
-            print('Unable to find User:', restrict_user_name)
+    parser.add_argument("--download", "-d", type=str, default=".",
+                        help="download files to the specified directory.")
+    parser.add_argument("--delete", "-x", action="store_true",
+                        help="Delete files too. From the server. To save space.")
+    parser.add_argument("--min-age", "-m", type=int, default="5",
+                        help="Number of days in the past to operate on.")
+    parser.add_argument("--user", "-u", type=str,
+                        help="Specify a username (not nick). Only operate on their files.")
+    parser.add_argument("--chan", "-c", type=str,
+                        help="Specify a channel name. Only operate on it's files.")
+    parser.add_argument("--debug", "-D", action="store_true",
+                        help="Debug mode (print a bunch of shit idk).")
+
+    args = parser.parse_args()
+    token = os.environ.get("SFDD_SLACK_TOKEN")
+
+    if args.download:
+        if not os.path.exists(args.download):
+            print('Download directory does not exist.')
             exit(1)
 
-    if restrict_channel_name:
-        restrict_channel_id = reverse_db_lookup(channel_db, restrict_channel_name)
-        if restrict_channel_id:
-            print('Restricting results to channel:', restrict_channel_name)
-        else:
-            print('Unable to find channel:', restrict_channel_name)
-            exit(1)
-
-    if download:
-        if not os.path.exists(directory):
-            print('Download directory does not exists, creating', directory)
-            os.makedirs(directory)
-
-    _files = list_files()
-    process_files(_files)
+    task = DownloadDeleteTask(token, debug=args.debug)
+    files = task.list_files(minimum_age=args.min_age, restrict_user_name=args.user, restrict_channel_name=args.chan)
+    task.process_files(files, download=args.download, delete=args.delete)
 
 
 if __name__ == "__main__":
